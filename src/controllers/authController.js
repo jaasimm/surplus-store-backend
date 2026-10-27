@@ -51,8 +51,8 @@ const sendOtp = asyncHandler(async (req, res) => {
       resendSeconds: env.otp.resendSeconds,
       otpTtlMinutes: env.otp.ttlMinutes,
       isNewUser: !user,
-      // DEV helper – never present in production with a real SMS provider
-      devOtp: env.isProd ? undefined : code,
+      // DEV / Console helper – shown when using simulated console SMS
+      devOtp: (!env.isProd || env.otp.provider === 'console') ? code : undefined,
     },
   });
 });
