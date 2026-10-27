@@ -1,0 +1,2 @@
+# Local image uploads land here (UPLOAD_DRIVER=local).
+# The seed script writes generated product images into /seed.

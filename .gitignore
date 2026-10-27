@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# User uploads (keep seed files and .gitkeep)
+uploads/*
+!uploads/.gitkeep
+!uploads/seed/
