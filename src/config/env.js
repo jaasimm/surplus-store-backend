@@ -72,7 +72,7 @@ const env = {
   },
 
   seed: {
-    adminMobile: process.env.ADMIN_MOBILE || '9999999999',
+    adminMobile: process.env.ADMIN_MOBILE || '+919999999999',
     adminName: process.env.ADMIN_NAME || 'Store Admin',
   },
 };
