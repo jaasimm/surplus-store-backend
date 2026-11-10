@@ -64,7 +64,31 @@ app.use(issueCsrfToken);
 app.use('/api', csrfProtect);
 
 /* --------------------------------------------------------------- static files */
-app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d', dotfiles: 'ignore' }));
+/**
+ * MIME types the bundled `mime@1` lookup doesn't know — AVIF above all: it is
+ * sent as `application/octet-stream`, and with helmet's
+ * `X-Content-Type-Options: nosniff` the browser refuses to render it in <img>,
+ * so every AVIF uploaded through the admin looked "broken".
+ * `send` keeps a Content-Type that is already set, so this override sticks.
+ */
+const UPLOAD_MIME = {
+  '.avif': 'image/avif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+};
+
+app.use('/uploads', express.static(UPLOAD_DIR, {
+  maxAge: '7d',
+  dotfiles: 'ignore',
+  setHeaders: (res, filePath) => {
+    const type = UPLOAD_MIME[path.extname(filePath).toLowerCase()];
+    if (type) res.setHeader('Content-Type', type);
+  },
+}));
 
 /* -------------------------------------------------------------- SEO endpoints */
 app.get('/sitemap.xml', async (_req, res) => {
@@ -83,6 +107,15 @@ app.get('/robots.txt', (_req, res) => {
 });
 
 /* ----------------------------------------------------------------- API */
+// Session state changes on every login/logout/refresh. Without `no-store` the
+// browser may reuse a stale 200 for GET /auth/me (or any other JSON call) and
+// show the wrong "logged in" state for the same browser tab/session.
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  res.set('Pragma', 'no-cache');
+  next();
+});
+
 app.use('/api', routes);
 
 /* -------------------------------------------------- serve the built SPA */

@@ -1,21 +1,23 @@
 const crypto = require('crypto');
-const env = require('../config/env');
+const { sameSite: authSameSite, secureCookie } = require('../utils/tokens');
 
 /**
  * Lightweight CSRF protection (double-submit cookie).
  * - The server sets a readable `ss_csrf` cookie (NOT httpOnly).
  * - The browser must echo it in the `X-CSRF-Token` header on every mutating request.
  * Combined with SameSite=Lax cookies this blocks cross-site form posts.
+ *
+ * The SameSite / Secure policy mirrors the auth cookies so all cookies behave
+ * consistently on mobile browsers (mixed policies cause silent drops on iOS/Android).
  */
 function issueCsrfToken(req, res, next) {
   let token = req.cookies?.ss_csrf;
   if (!token) {
     token = crypto.randomBytes(24).toString('hex');
-    const isHttps = env.isProd || req.secure || req.headers['x-forwarded-proto'] === 'https';
     res.cookie('ss_csrf', token, {
-      httpOnly: false,
-      secure: isHttps,
-      sameSite: isHttps ? 'none' : 'lax',
+      httpOnly: false,          // must be readable by JS
+      secure: secureCookie,     // mirrors auth cookie Secure flag
+      sameSite: authSameSite,   // mirrors auth cookie SameSite flag
       path: '/',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });

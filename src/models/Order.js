@@ -74,6 +74,12 @@ const orderSchema = new Schema(
     },
 
     deliveredAt: { type: Date },
+    shipment: {
+      courier: { type: String, default: '' },
+      trackingNumber: { type: String, default: '' },
+      trackingUrl: { type: String, default: '' },
+      shippedAt: { type: Date },
+    },
   },
   { timestamps: true }
 );

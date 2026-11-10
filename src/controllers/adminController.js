@@ -165,33 +165,45 @@ const listOrders = asyncHandler(async (req, res) => {
 });
 
 /* ------------------------------------------- PATCH /api/admin/orders/:id/status */
-/** Update fulfilment status; cancelling restores the stock. */
+/** Update fulfilment status and tracking info; cancelling restores the stock. */
 const updateOrderStatus = asyncHandler(async (req, res) => {
-  const { status, note } = req.body;
+  const { status, note, shipment } = req.body;
   const order = await Order.findById(req.params.id);
   if (!order) throw ApiError.notFound('Order not found');
 
   if (order.status === 'cancelled') throw ApiError.badRequest('This order was cancelled and cannot be changed');
 
-  order.status = status;
-  if (status === 'delivered') {
-    order.deliveredAt = new Date();
-    if (order.payment.method === 'cod') order.payment.status = 'paid';
+  if (shipment) {
+    if (!order.shipment) order.shipment = {};
+    if (shipment.courier !== undefined) order.shipment.courier = String(shipment.courier).trim();
+    if (shipment.trackingNumber !== undefined) order.shipment.trackingNumber = String(shipment.trackingNumber).trim();
+    if (shipment.trackingUrl !== undefined) order.shipment.trackingUrl = String(shipment.trackingUrl).trim();
   }
-  order.statusHistory.push({ status, note: note || `Marked as ${status}`, at: new Date() });
+
+  if (status && status !== order.status) {
+    order.status = status;
+    if (status === 'shipped') {
+      if (!order.shipment) order.shipment = {};
+      if (!order.shipment.shippedAt) order.shipment.shippedAt = new Date();
+    }
+    if (status === 'delivered') {
+      order.deliveredAt = new Date();
+      if (order.payment.method === 'cod') order.payment.status = 'paid';
+    }
+    order.statusHistory.push({ status, note: note || `Marked as ${status}`, at: new Date() });
+
+    if (status === 'cancelled') {
+      for (const item of order.items) {
+        await Product.updateOne({ _id: item.product, 'sizes.size': item.size }, { $inc: { 'sizes.$.stock': item.qty } });
+      }
+      if (order.payment.status === 'paid') {
+        order.payment.status = 'refunded';
+      }
+    }
+  }
+
   await order.save();
-
-  if (status === 'cancelled') {
-    for (const item of order.items) {
-      await Product.updateOne({ _id: item.product, 'sizes.size': item.size }, { $inc: { 'sizes.$.stock': item.qty } });
-    }
-    if (order.payment.status === 'paid') {
-      order.payment.status = 'refunded';
-      await order.save();
-    }
-  }
-
-  res.json({ success: true, message: `Order marked as ${status}`, data: order });
+  res.json({ success: true, message: status ? `Order marked as ${status}` : 'Tracking updated', data: order });
 });
 
 /* ---------------------------------------- PATCH /api/admin/orders/:id/return */

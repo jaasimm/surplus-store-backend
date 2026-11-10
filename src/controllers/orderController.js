@@ -28,6 +28,7 @@ const serialize = (o) => ({
   returnRequest: o.returnRequest,
   createdAt: o.createdAt,
   deliveredAt: o.deliveredAt,
+  shipment: o.shipment || { courier: '', trackingNumber: '', trackingUrl: '' },
 });
 
 /** Put reserved units back into the products' size stock. */

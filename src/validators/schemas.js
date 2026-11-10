@@ -29,10 +29,13 @@ const schemas = {
   }),
 
   verifyOtp: z.object({
-    mobile,
-    otp: otpCode,
+    mobile: mobile.optional(),
+    otp: otpCode.optional(),
+    idToken: z.string().trim().min(10).max(4096).optional(),
     guestId: z.string().trim().max(64).optional(),
     name: z.string().trim().min(2).max(60).optional(),
+  }).refine((data) => data.idToken || (data.mobile && data.otp), {
+    message: 'Either idToken or mobile and otp are required',
   }),
 
   /* ------------------------------------------------------------- products */

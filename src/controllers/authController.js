@@ -7,6 +7,17 @@ const { normalizeMobile } = require('../utils/helpers');
 const { setAuthCookies, clearAuthCookies, verifyRefresh } = require('../utils/tokens');
 const { mergeGuestCart } = require('../utils/cartMerge');
 
+let firebaseAdmin = null;
+try {
+  const admin = require('firebase-admin');
+  if (admin.apps.length === 0) {
+    admin.initializeApp({ projectId: env.otp.firebaseProjectId || 'surpluses' });
+  }
+  firebaseAdmin = admin;
+} catch (e) {
+  console.warn('[firebase-admin] not initialized:', e.message);
+}
+
 const publicUser = (u) => ({
   id: String(u._id),
   mobile: u.mobile,
@@ -40,7 +51,7 @@ const sendOtp = asyncHandler(async (req, res) => {
     ip: req.ip,
   });
 
-  await sendSms(mobile, `Your Surplus Store login code is ${code}. Valid for ${env.otp.ttlMinutes} minutes.`);
+  await sendSms(mobile, `Your Surplus Store login code is ${code}. Valid for ${env.otp.ttlMinutes} minutes.`, code);
 
   const user = await User.findOne({ mobile }).select('name');
   res.json({
@@ -51,8 +62,11 @@ const sendOtp = asyncHandler(async (req, res) => {
       resendSeconds: env.otp.resendSeconds,
       otpTtlMinutes: env.otp.ttlMinutes,
       isNewUser: !user,
-      // DEV / Console helper – shown when using simulated console SMS
-      devOtp: (!env.isProd || env.otp.provider === 'console') ? code : undefined,
+      // DEV ONLY – shown when using the simulated console SMS provider.
+      // Must be AND, not OR: the previous `|| env.otp.provider === 'console'`
+      // returned the raw OTP whenever provider=console, EVEN IN PRODUCTION,
+      // letting anyone read back the code for any phone number.
+      devOtp: (!env.isProd && env.otp.provider === 'console') ? code : undefined,
     },
   });
 });
@@ -65,31 +79,45 @@ const sendOtp = asyncHandler(async (req, res) => {
  * - Merges the guest cart into the user cart.
  */
 const verifyOtp = asyncHandler(async (req, res) => {
-  const mobile = normalizeMobile(req.body.mobile);
-  const { otp, guestId, name } = req.body;
+  const { idToken, guestId, name } = req.body;
+  let mobile;
 
-  const record = await Otp.findOne({ mobile, consumed: false }).sort({ createdAt: -1 });
-  if (!record) throw ApiError.badRequest('No OTP requested for this number. Please request a new code.');
+  if (idToken) {
+    if (!firebaseAdmin) throw ApiError.internal('Firebase authentication is not available on server');
+    try {
+      const decoded = await firebaseAdmin.auth().verifyIdToken(idToken);
+      if (!decoded.phone_number) throw ApiError.badRequest('No phone number associated with this token');
+      mobile = normalizeMobile(decoded.phone_number);
+    } catch (err) {
+      throw ApiError.badRequest(`Authentication token verification failed: ${err.message}`);
+    }
+  } else {
+    mobile = normalizeMobile(req.body.mobile);
+    const { otp } = req.body;
 
-  if (record.expiresAt.getTime() < Date.now()) {
-    await record.deleteOne();
-    throw ApiError.badRequest('This OTP has expired. Please request a new one.');
-  }
+    const record = await Otp.findOne({ mobile, consumed: false }).sort({ createdAt: -1 });
+    if (!record) throw ApiError.badRequest('No OTP requested for this number. Please request a new code.');
 
-  if (record.attempts >= env.otp.maxAttempts) {
-    await record.deleteOne();
-    throw ApiError.tooMany('Too many incorrect attempts. Please request a new OTP.');
-  }
+    if (record.expiresAt.getTime() < Date.now()) {
+      await record.deleteOne();
+      throw ApiError.badRequest('This OTP has expired. Please request a new one.');
+    }
 
-  if (record.codeHash !== hash(otp)) {
-    record.attempts += 1;
+    if (record.attempts >= env.otp.maxAttempts) {
+      await record.deleteOne();
+      throw ApiError.tooMany('Too many incorrect attempts. Please request a new OTP.');
+    }
+
+    if (record.codeHash !== hash(otp)) {
+      record.attempts += 1;
+      await record.save();
+      const left = env.otp.maxAttempts - record.attempts;
+      throw ApiError.badRequest(`Incorrect OTP. ${left > 0 ? `${left} attempt(s) left.` : 'Please request a new one.'}`);
+    }
+
+    record.consumed = true;
     await record.save();
-    const left = env.otp.maxAttempts - record.attempts;
-    throw ApiError.badRequest(`Incorrect OTP. ${left > 0 ? `${left} attempt(s) left.` : 'Please request a new one.'}`);
   }
-
-  record.consumed = true;
-  await record.save();
 
   let user = await User.findOne({ mobile });
   let isNewUser = false;

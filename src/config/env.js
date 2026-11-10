@@ -12,6 +12,10 @@ const env = {
   isProd: (process.env.NODE_ENV || 'development') === 'production',
   port: Number(process.env.PORT || 5000),
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
+  // Public origin of this API (e.g. https://surplus-store-backend.onrender.com).
+  // Used to build absolute URLs for locally-stored uploads and by
+  // `npm run audit:images`; empty → derived from the request's Host header.
+  publicApiUrl: (process.env.PUBLIC_API_URL || '').replace(/\/+$/, ''),
 
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/surplus_store',
 
@@ -37,6 +41,10 @@ const env = {
       sender: process.env.MSG91_SENDER_ID || 'SURPLS',
       template: process.env.MSG91_TEMPLATE_ID || '',
     },
+    fast2sms: {
+      key: process.env.FAST2SMS_API_KEY || '',
+    },
+    firebaseProjectId: process.env.FIREBASE_PROJECT_ID || 'surpluses',
   },
 
   razorpay: {
@@ -79,12 +87,35 @@ const env = {
 
 // Fail fast on obviously unsafe production configuration.
 if (env.isProd) {
-  const weak = ['change_me_access_secret', 'dev_access_secret_change_me'];
-  if (weak.includes(env.jwt.accessSecret) || weak.includes(env.jwt.refreshSecret)) {
-    throw new Error('FATAL: set strong JWT_ACCESS_SECRET / JWT_REFRESH_SECRET in production.');
+  // The previous list missed `change_me_refresh_secret` (the value shipped in
+  // .env.example), so a project that had only rotated the access secret would
+  // pass the check with a publicly-known refresh secret. Also reject anything
+  // shorter than 32 chars regardless of what it is.
+  const PLACEHOLDER_SECRETS = [
+    'change_me_access_secret',
+    'change_me_refresh_secret',
+    'dev_access_secret_change_me',
+    'dev_refresh_secret_change_me',
+  ];
+  const isWeakSecret = (secret) =>
+    !secret || PLACEHOLDER_SECRETS.includes(secret) || secret.length < 32;
+  if (isWeakSecret(env.jwt.accessSecret) || isWeakSecret(env.jwt.refreshSecret)) {
+    throw new Error(
+      'FATAL: JWT_ACCESS_SECRET / JWT_REFRESH_SECRET must be unique random strings of at ' +
+        'least 32 characters in production. Generate one with: openssl rand -base64 48'
+    );
   }
   if (env.otp.provider === 'console') {
     console.warn('[env] WARNING: OTP_PROVIDER=console in production — OTPs are NOT sent by SMS.');
+  }
+  if (env.upload.driver === 'local') {
+    console.warn(
+      "[env] WARNING: UPLOAD_DRIVER=local in production — images are written to this server's disk and are " +
+        'DELETED on every redeploy/restart (Render, Heroku, …). Set UPLOAD_DRIVER=cloudinary.'
+    );
+  }
+  if (env.upload.driver !== 'cloudinary' && env.upload.cloudinary.cloudName) {
+    console.warn('[env] NOTE: Cloudinary credentials are set but UPLOAD_DRIVER is not "cloudinary".');
   }
 }
 

@@ -20,7 +20,10 @@ const fileFilter = (_req, file, cb) => {
 const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_SIZE, files: 6 } });
 
 /* -------------------------------------------------------------- local driver */
-const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
+// Env-overridable so a mounted persistent disk (Render disk, EBS, …) can be
+// pointed at without a code change. NOTE: on Render/Heroku the app disk is
+// ephemeral — files here are wiped on every redeploy/restart.
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '..', '..', 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 function saveLocal(buffer, originalName) {
@@ -31,8 +34,31 @@ function saveLocal(buffer, originalName) {
 }
 
 /* --------------------------------------------------------- cloudinary driver */
+const DRIVERS = ['local', 'cloudinary'];
+if (!DRIVERS.includes(env.upload.driver)) {
+  throw new Error(`UPLOAD_DRIVER must be one of ${DRIVERS.join(' | ')} — got "${env.upload.driver}"`);
+}
+
 let cloudinary = null;
 if (env.upload.driver === 'cloudinary') {
+  // Fail fast instead of silently falling back to the local disk: a missed
+  // variable would put images back on an ephemeral filesystem and they would
+  // vanish on the next deploy (which is exactly what happened before).
+  const missing = Object.entries({
+    CLOUDINARY_CLOUD_NAME: env.upload.cloudinary.cloudName,
+    CLOUDINARY_API_KEY: env.upload.cloudinary.apiKey,
+    CLOUDINARY_API_SECRET: env.upload.cloudinary.apiSecret,
+  })
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length) {
+    throw new Error(
+      `UPLOAD_DRIVER=cloudinary but ${missing.join(', ')} ${missing.length > 1 ? 'are' : 'is'} not set. ` +
+        'Refusing to write to the local disk (files there are deleted on every redeploy).'
+    );
+  }
+
   cloudinary = require('cloudinary').v2;
   cloudinary.config({
     cloud_name: env.upload.cloudinary.cloudName,
@@ -46,19 +72,27 @@ if (env.upload.driver === 'cloudinary') {
  * Uses Cloudinary when configured, otherwise writes to server/uploads.
  */
 async function storeImage(file, req) {
-  if (env.upload.driver === 'cloudinary' && cloudinary) {
-    const result = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { folder: 'surplus-store', transformation: [{ quality: 'auto', fetch_format: 'auto' }] },
-        (err, res) => (err ? reject(err) : resolve(res))
-      );
-      stream.end(file.buffer);
-    });
-    return result.secure_url;
+  if (cloudinary) {
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder: 'surplus-store', transformation: [{ quality: 'auto', fetch_format: 'auto' }] },
+          (err, res) => (err ? reject(err) : resolve(res))
+        );
+        stream.end(file.buffer);
+      });
+      return result.secure_url;
+    } catch (err) {
+      // Surface a readable message in the admin panel instead of a bare 500.
+      throw new Error(`Image upload failed: ${err.message || err}`);
+    }
   }
 
   const filename = saveLocal(file.buffer, file.originalname);
-  const origin = `${req.protocol}://${req.get('host')}`;
+  // Prefer the configured public origin: the Host header is whatever the
+  // client/proxy sent (localhost:5173 behind Vite, an internal name behind a
+  // load balancer), which is how dev uploads ended up stored as :5173 URLs.
+  const origin = env.publicApiUrl || `${req.protocol}://${req.get('host')}`;
   return `${origin}/uploads/${filename}`;
 }
 
