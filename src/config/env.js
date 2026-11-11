@@ -61,6 +61,11 @@ const env = {
       pass: process.env.SMTP_PASS || '',
       from: process.env.MAIL_FROM || 'Surplus Store <no-reply@surplusstore.in>',
     },
+    // Form-to-email forwarding for POST /api/contact (https://web3forms.com).
+    // Public by design — it is an alias for the owner's inbox, not a password.
+    web3forms: {
+      key: process.env.WEB3FORMS_ACCESS_KEY || '',
+    },
   },
 
   upload: {
@@ -116,6 +121,12 @@ if (env.isProd) {
   }
   if (env.upload.driver !== 'cloudinary' && env.upload.cloudinary.cloudName) {
     console.warn('[env] NOTE: Cloudinary credentials are set but UPLOAD_DRIVER is not "cloudinary".');
+  }
+  if (!env.notify.web3forms.key && !(env.notify.smtp.host && env.notify.smtp.user)) {
+    console.warn(
+      '[env] WARNING: no WEB3FORMS_ACCESS_KEY and no SMTP credentials — contact form messages are ' +
+        'saved to the admin inbox but NO e-mail notification is sent.'
+    );
   }
 }
 
